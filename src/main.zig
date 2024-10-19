@@ -1,37 +1,107 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+fn socketPath(allocator: Allocator) !?[]u8 {
+    const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR")
+        orelse return null;
+    const wayland_display = std.posix.getenv("WAYLAND_DISPLAY")
+        orelse "wayland-0";
+    const items = &[_][]const u8 {xdg_runtime_dir, "/", wayland_display};
+    const result = try std.mem.concat(allocator, u8, items);
+
+    return result;
+}
+
+const SocketAddr = std.posix.system.sockaddr.un;
+
+fn unixSocketAddress(allocator: Allocator) !?SocketAddr {
+    const opt_path = try socketPath(allocator); 
+
+    if (opt_path) |path| {
+        defer allocator.free(path);
+        var sockaddr = SocketAddr {.path = undefined};
+        std.mem.copyForwards(u8, @constCast(&sockaddr.path), path);
+        return sockaddr;
+    }
+    else {
+        return null;
+    }
+}
+
+fn fileDescriptor(allocator: Allocator) !?i32 {
+    const sockaddr = try unixSocketAddress(allocator);
+    if (sockaddr) |sa| {
+        const fd = try std.posix.socket(
+            std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+        try std.posix.connect(fd, @ptrCast(&sa), @sizeOf(@TypeOf(sa)));
+        return fd;
+    }
+
+    return null;
+}
+
+const wayland_header_size = 8;
+
+fn message_create_registry(allocator: Allocator, current_id: u32) ![]u8 {
+    const object: u32 = 1;
+    const opcode: u16 = 1;
+    const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
+
+    const item1: [4]u8 = std.mem.toBytes(object);
+    const item2: [2]u8 = std.mem.toBytes(opcode);
+    const item3: [2]u8 = std.mem.toBytes(size);
+    const item4: [4]u8 = std.mem.toBytes(current_id);
+
+    const items = [_][]u8 {
+        @constCast(&item1),
+        @constCast(&item2),
+        @constCast(&item3),
+        @constCast(&item4)};
+    const result = try std.mem.concat(allocator, u8, &items);
+    return result;
+}
+
+fn shared_memory_filename(allocator: Allocator) ![]u8 {
+    const size = 16;
+    var seed: u64 = undefined;
+    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+    var prng = std.Random.DefaultPrng.init(seed);
+    var name: [size]u8 = undefined;
+    var i: u8 = 0;
+    while (i < size) : (i += 1) {
+        const value = prng.random().intRangeAtMost(u8, 'a', 'z');
+        name[i] = value;
+    }
+    name[0] = '/';
+    const result: []u8 = try allocator.alloc(u8, size);
+    @memcpy(result, &name);
+    return result;
+}
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer {
+        _ = gpa.deinit();
+    }
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    const fdOrNull = try fileDescriptor(allocator);
+    if (fdOrNull) |fd| {
+	var current_id: u32 = 1;
+	const msg = try message_create_registry(allocator, current_id);
+	defer allocator.free(msg);
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+        current_id += 1;
 
-    try bw.flush(); // Don't forget to flush!
-}
+	std.debug.print("{x}\n", .{msg});
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    const global = struct {
-        fn testOne(input: []const u8) anyerror!void {
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(global.testOne, .{});
+	const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
+        std.debug.print("{}\n", .{size});
+        const filename = try shared_memory_filename(allocator);
+        defer allocator.free(filename);
+        std.debug.print("{s}\n", .{filename});
+        const flag = std.c.O {.CREAT = true};
+        const mode = 0o600;
+        _ = std.c.shm_open(filename, flag, mode);
+    }
 }
