@@ -61,7 +61,7 @@ fn message_create_registry(allocator: Allocator, current_id: u32) ![]u8 {
     return result;
 }
 
-fn shared_memory_filename(allocator: Allocator) ![]u8 {
+fn shared_memory_filename(allocator: Allocator) ![*:0]const u8 {
     const size = 16;
     var seed: u64 = undefined;
     std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
@@ -73,8 +73,7 @@ fn shared_memory_filename(allocator: Allocator) ![]u8 {
         name[i] = value;
     }
     name[0] = '/';
-    const result: []u8 = try allocator.alloc(u8, size);
-    @memcpy(result, &name);
+    const result: [*:0]u8 = try allocator.dupeZ(u8, &name);
     return result;
 }
 
@@ -98,10 +97,11 @@ pub fn main() !void {
 	const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
         std.debug.print("{}\n", .{size});
         const filename = try shared_memory_filename(allocator);
-        defer allocator.free(filename);
+        //defer allocator.free(filename.*);
         std.debug.print("{s}\n", .{filename});
         const flag = std.c.O {.CREAT = true};
         const mode = 0o600;
-        _ = std.c.shm_open(filename, flag, mode);
+        const sh_fd = std.c.shm_open(filename, @bitCast(flag), mode);
+        std.debug.print("{}\n", .{sh_fd});
     }
 }
