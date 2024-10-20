@@ -97,7 +97,7 @@ pub fn main() !void {
 	const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
         std.debug.print("{}\n", .{size});
         const filename = try shared_memory_filename(allocator);
-        //defer allocator.free(std.mem.asBytes(filename));
+        defer allocator.free(std.mem.span(filename));
         std.debug.print("{s}\n", .{filename});
         const flag = std.c.O {.CREAT = true, .EXCL = true, .ACCMODE = .RDWR};
         const mode = 0o600;
