@@ -1,48 +1,11 @@
 const std = @import("std");
+const shmem = @import("shared_mem.zig");
+const socket = @import("socket.zig");
 const Allocator = std.mem.Allocator;
-
-fn socketPath(allocator: Allocator) !?[]u8 {
-    const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR")
-        orelse return null;
-    const wayland_display = std.posix.getenv("WAYLAND_DISPLAY")
-        orelse "wayland-0";
-    const items = &[_][]const u8 {xdg_runtime_dir, "/", wayland_display};
-    const result = try std.mem.concat(allocator, u8, items);
-
-    return result;
-}
-
-const SocketAddr = std.posix.system.sockaddr.un;
-
-fn unixSocketAddress(allocator: Allocator) !?SocketAddr {
-    const opt_path = try socketPath(allocator); 
-
-    if (opt_path) |path| {
-        defer allocator.free(path);
-        var sockaddr = SocketAddr {.path = undefined};
-        std.mem.copyForwards(u8, @constCast(&sockaddr.path), path);
-        return sockaddr;
-    }
-    else {
-        return null;
-    }
-}
-
-fn fileDescriptor(allocator: Allocator) !?i32 {
-    const sockaddr = try unixSocketAddress(allocator);
-    if (sockaddr) |sa| {
-        const fd = try std.posix.socket(
-            std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
-        try std.posix.connect(fd, @ptrCast(&sa), @sizeOf(@TypeOf(sa)));
-        return fd;
-    }
-
-    return null;
-}
 
 const wayland_header_size = 8;
 
-fn message_create_registry(allocator: Allocator, current_id: u32) ![]u8 {
+fn messageCreateRegistry(allocator: Allocator, current_id: u32) ![]u8 {
     const object: u32 = 1;
     const opcode: u16 = 1;
     const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
@@ -61,21 +24,35 @@ fn message_create_registry(allocator: Allocator, current_id: u32) ![]u8 {
     return result;
 }
 
-fn shared_memory_filename(allocator: Allocator) ![*:0]const u8 {
-    const size = 16;
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
-    var prng = std.Random.DefaultPrng.init(seed);
-    var name: [size]u8 = undefined;
-    var i: u8 = 0;
-    while (i < size) : (i += 1) {
-        const value = prng.random().intRangeAtMost(u8, 'a', 'z');
-        name[i] = value;
-    }
-    name[0] = '/';
-    const result: [*:0]u8 = try allocator.dupeZ(u8, &name);
+fn createRegistry(allocator: Allocator, current_id: u32, fd: i32) !usize {
+    const msg = try messageCreateRegistry(allocator, current_id);
+    defer allocator.free(msg);
+
+    const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
+    return size;
+}
+
+const page_size = std.mem.page_size;
+const PoolData = []align(page_size)u8;
+
+fn mapMemory(sh_fd: c_int, size: usize) !PoolData {
+    const prot = std.posix.PROT.READ | std.posix.PROT.WRITE;
+    const flags: std.posix.MAP = .{.TYPE = std.os.linux.MAP_TYPE.SHARED };
+    const result = try std.posix.mmap(null, size, prot, flags, sh_fd, 0);
     return result;
 }
+
+const color_channels = 4;
+
+const State = struct {
+    wayland_registry_id: u32 = undefined,
+    width: u32 = 117,
+    height: u32 = 150,
+    stride: u32 = undefined,
+    shm_pool_data: PoolData = undefined,
+    sh_fd: c_int = undefined,
+    shm_pool_size: u32 = undefined,
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -84,24 +61,37 @@ pub fn main() !void {
         _ = gpa.deinit();
     }
 
-    const fdOrNull = try fileDescriptor(allocator);
+    const fdOrNull = try socket.fileDescriptor(allocator);
     if (fdOrNull) |fd| {
+        var state = State {};
+        state.stride = state.width * color_channels;
+        state.shm_pool_size = state.height * state.stride; // singe buffering
 	var current_id: u32 = 1;
-	const msg = try message_create_registry(allocator, current_id);
-	defer allocator.free(msg);
+        state.wayland_registry_id = current_id;
 
-        current_id += 1;
+        const size = createRegistry(allocator, current_id, fd)
+            catch unreachable;
 
-	std.debug.print("{x}\n", .{msg});
+        current_id = current_id + 1;
 
-	const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
-        std.debug.print("{}\n", .{size});
-        const filename = try shared_memory_filename(allocator);
-        defer allocator.free(std.mem.span(filename));
-        std.debug.print("{s}\n", .{filename});
-        const flag = std.c.O {.CREAT = true, .EXCL = true, .ACCMODE = .RDWR};
-        const mode = 0o600;
-        const sh_fd = std.c.shm_open(filename, @bitCast(flag), mode);
-        std.debug.print("{}\n", .{sh_fd});
+        const sh_fd = try shmem.createSharedMemoryFile(allocator);
+        state.sh_fd = sh_fd;
+
+        try std.posix.ftruncate(sh_fd, size);
+
+        const shm_pool_data = try mapMemory(sh_fd, size);
+
+        state.shm_pool_data = shm_pool_data;
+
+        //while (true) {
+{
+            var read_array: [4096]u8 = undefined;
+            var read_buf: []u8 = &read_array;
+            _ = &read_buf;
+            const read_bytes = try std.posix.recv(fd, read_buf, 0);
+
+            std.debug.print("{}\n", .{read_bytes});
+            std.debug.print("{s}\n", .{read_buf});
+        }
     }
 }
