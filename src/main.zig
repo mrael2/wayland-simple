@@ -2,34 +2,76 @@ const std = @import("std");
 const shmem = @import("shared_mem.zig");
 const socket = @import("socket.zig");
 const Allocator = std.mem.Allocator;
+const native_endian = @import("builtin").target.cpu.arch.endian();
 
 const wayland_header_size = 8;
 
-fn messageCreateRegistry(allocator: Allocator, current_id: u32) ![]u8 {
-    const object: u32 = 1;
+fn messageCreateRegistry(current_id: u32) [4][]u8 {
+    const object_id: u32 = 1;
     const opcode: u16 = 1;
     const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
+    std.debug.assert(roundup4(size) == size);
 
-    const item1: [4]u8 = std.mem.toBytes(object);
-    const item2: [2]u8 = std.mem.toBytes(opcode);
-    const item3: [2]u8 = std.mem.toBytes(size);
-    const item4: [4]u8 = std.mem.toBytes(current_id);
+    var item1: [4]u8 = undefined;
+    var item2: [2]u8 = undefined;
+    var item3: [2]u8 = undefined;
+    var item4: [4]u8 = undefined;
 
-    const items = [_][]u8 {
+    std.mem.writeInt(u32, &item1, object_id, native_endian);
+    std.mem.writeInt(u16, &item2, opcode, native_endian);
+    std.mem.writeInt(u16, &item3, size, native_endian);
+    std.mem.writeInt(u32, &item4, current_id, native_endian);
+
+    const items = [_][]u8{
         @constCast(&item1),
         @constCast(&item2),
         @constCast(&item3),
-        @constCast(&item4)};
-    const result = try std.mem.concat(allocator, u8, &items);
-    return result;
+        @constCast(&item4),
+    };
+
+    return items;
 }
 
 fn createRegistry(allocator: Allocator, current_id: u32, fd: i32) !usize {
-    const msg = try messageCreateRegistry(allocator, current_id);
-    defer allocator.free(msg);
+    const object_id: u32 = 1;
+    const opcode: u16 = 1;
+    const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
+    std.debug.assert(roundup4(size) == size);
 
-    const size = try std.posix.send(fd, msg, std.os.linux.MSG.DONTWAIT);
-    return size;
+    var item1: [4]u8 = undefined;
+    var item2: [2]u8 = undefined;
+    var item3: [2]u8 = undefined;
+    var item4: [4]u8 = undefined;
+
+    std.mem.writeInt(u32, &item1, object_id, native_endian);
+    std.mem.writeInt(u16, &item2, opcode, native_endian);
+    std.mem.writeInt(u16, &item3, size, native_endian);
+    std.mem.writeInt(u32, &item4, current_id, native_endian);
+
+    const items = [_][]u8{
+        @constCast(&item1),
+        @constCast(&item2),
+        @constCast(&item3),
+        @constCast(&item4),
+    };
+    std.debug.print("create registry {x}\n", .{items});
+    const result = try std.mem.concat(allocator, u8, &items);
+    defer allocator.free(result);
+    std.debug.print("create registry {x}\n", .{result});
+    const send_size = try std.posix.send(fd, result, std.os.linux.MSG.DONTWAIT);
+    return send_size;
+}
+
+fn roundup4(n: u32) u32 {
+    return (n + 3) & 0xfffffffc; // two's complement representation of -4
+}
+
+test "rounding1" {
+    try std.testing.expect(roundup4(7) == 8);
+}
+
+test "rounding2" {
+    try std.testing.expect(roundup4(11) == 12);
 }
 
 const page_size = std.mem.page_size;
@@ -66,7 +108,7 @@ pub fn main() !void {
         var state = State {};
         state.stride = state.width * color_channels;
         state.shm_pool_size = state.height * state.stride; // singe buffering
-	var current_id: u32 = 1;
+	var current_id: u32 = 2;
         state.wayland_registry_id = current_id;
 
         const size = createRegistry(allocator, current_id, fd)
