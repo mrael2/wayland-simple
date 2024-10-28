@@ -6,32 +6,6 @@ const native_endian = @import("builtin").target.cpu.arch.endian();
 
 const wayland_header_size = 8;
 
-fn messageCreateRegistry(current_id: u32) [4][]u8 {
-    const object_id: u32 = 1;
-    const opcode: u16 = 1;
-    const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
-    std.debug.assert(roundup4(size) == size);
-
-    var item1: [4]u8 = undefined;
-    var item2: [2]u8 = undefined;
-    var item3: [2]u8 = undefined;
-    var item4: [4]u8 = undefined;
-
-    std.mem.writeInt(u32, &item1, object_id, native_endian);
-    std.mem.writeInt(u16, &item2, opcode, native_endian);
-    std.mem.writeInt(u16, &item3, size, native_endian);
-    std.mem.writeInt(u32, &item4, current_id, native_endian);
-
-    const items = [_][]u8{
-        @constCast(&item1),
-        @constCast(&item2),
-        @constCast(&item3),
-        @constCast(&item4),
-    };
-
-    return items;
-}
-
 fn createRegistry(allocator: Allocator, current_id: u32, fd: i32) !usize {
     const object_id: u32 = 1;
     const opcode: u16 = 1;
