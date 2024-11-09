@@ -6,33 +6,59 @@ const native_endian = @import("builtin").target.cpu.arch.endian();
 
 const wayland_header_size = 8;
 
-fn createRegistry(allocator: Allocator, current_id: u32, fd: i32) !usize {
-    const object_id: u32 = 1;
-    const opcode: u16 = 1;
-    const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
-    std.debug.assert(roundup4(size) == size);
+const Header = struct {
+    object_id: u32,
+    opcode: u16,
+    size: u16,
+};
 
+fn headerMemory(allocator: Allocator, header: *const Header) ![]u8 {
     var item1: [4]u8 = undefined;
     var item2: [2]u8 = undefined;
     var item3: [2]u8 = undefined;
-    var item4: [4]u8 = undefined;
 
-    std.mem.writeInt(u32, &item1, object_id, native_endian);
-    std.mem.writeInt(u16, &item2, opcode, native_endian);
-    std.mem.writeInt(u16, &item3, size, native_endian);
-    std.mem.writeInt(u32, &item4, current_id, native_endian);
+    std.mem.writeInt(u32, &item1, header.object_id, native_endian);
+    std.mem.writeInt(u16, &item2, header.opcode, native_endian);
+    std.mem.writeInt(u16, &item3, header.size, native_endian);
 
     const items = [_][]u8{
         @constCast(&item1),
         @constCast(&item2),
         @constCast(&item3),
-        @constCast(&item4),
     };
-    std.debug.print("create registry {x}\n", .{items});
     const result = try std.mem.concat(allocator, u8, &items);
-    defer allocator.free(result);
-    std.debug.print("create registry {x}\n", .{result});
-    const send_size = try std.posix.send(fd, result, std.os.linux.MSG.DONTWAIT);
+    return result;
+}
+
+fn registryMessage(allocator: Allocator, current_id: u32) ![]u8 {
+    const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
+    std.debug.assert(roundup4(size) == size);
+
+    const header = Header {
+        .object_id = 1, // Wayland display object ID
+        .opcode = 1, // get registry opcode
+        .size = size,
+    };
+
+    const header_memory = try headerMemory(allocator, &header);
+    defer allocator.free(header_memory);
+
+    var id_bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &id_bytes, current_id, native_endian);
+
+    const items = [_][]u8{
+        header_memory,
+        &id_bytes,
+    };
+    const result = try std.mem.concat(allocator, u8, &items);
+    return result;
+}
+
+fn createRegistry(allocator: Allocator, current_id: u32, fd: i32) !usize {
+    const memory = try registryMessage(allocator, current_id);
+    defer allocator.free(memory);
+
+    const send_size = try std.posix.send(fd, memory, std.os.linux.MSG.DONTWAIT);
     return send_size;
 }
 
