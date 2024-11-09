@@ -10,8 +10,8 @@ fn randomNumberGenerator() std.Random {
     return result;
 }
 
-const filenameSize = 16;
-const FileArr = [filenameSize]u8;
+const filename_size = 16;
+const FileArr = [filename_size]u8;
 
 fn randomMemoryFilename(prng: *std.Random) FileArr {
     var name: FileArr = undefined;

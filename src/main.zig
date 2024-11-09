@@ -81,7 +81,7 @@ pub fn main() !void {
     if (fdOrNull) |fd| {
         var state = State {};
         state.stride = state.width * color_channels;
-        state.shm_pool_size = state.height * state.stride; // singe buffering
+        state.shm_pool_size = state.height * state.stride; // single buffering
 	var current_id: u32 = 2;
         state.wayland_registry_id = current_id;
 
@@ -105,9 +105,57 @@ pub fn main() !void {
             var read_buf: []u8 = &read_array;
             _ = &read_buf;
             const read_bytes = try std.posix.recv(fd, read_buf, 0);
+            const buffer: []u8 = read_buf[0..read_bytes];
 
             std.debug.print("{}\n", .{read_bytes});
-            std.debug.print("{s}\n", .{read_buf});
+            //std.debug.print("{s}\n", .{read_buf});
+            //std.debug.print("{s}\n", .{buffer});
+
+            waylandHandleMessage(sh_fd, &state, buffer);
         }
+    }
+}
+
+fn waylandHandleMessage(fd: c_int, state: *State, msg: []u8) void {
+    _ = fd;
+    std.debug.assert(msg.len >= 8);
+
+    const object_id_bytes = msg[0..4];
+    const object_id: u32 = std.mem.readInt(u32, object_id_bytes, native_endian);
+
+    const opcode_bytes = msg[4..6];
+    const opcode = std.mem.readInt(u16, opcode_bytes, native_endian);
+
+    const announced_size_bytes = msg[6..8];
+    const announced_size = std.mem.readInt(u16, announced_size_bytes,
+        native_endian);
+    std.debug.assert(roundup4(announced_size) <= announced_size);
+
+    const is_registry_event = object_id == state.wayland_registry_id
+        and opcode == 0;
+
+    if (is_registry_event) {
+        std.debug.print("got here\n", .{});
+        const name_bytes = msg[8..12];
+        const name = std.mem.readInt(u32, name_bytes, native_endian);
+        std.debug.print("name bytes = {x}\n", .{name_bytes});
+        std.debug.print("name = {x}\n", .{name});
+
+        const interface_len_bytes = msg[12..16];
+        const interface_len = std.mem.readInt(u32, interface_len_bytes,
+            native_endian);
+        std.debug.print("interface len bytes = {x}\n", .{interface_len_bytes});
+        std.debug.print("interface len = {x}\n", .{interface_len});
+        const padded_interface_len = roundup4(interface_len);
+
+        const fixed_interface_size = 512;
+        var interface2: [fixed_interface_size]u8 = undefined;
+        _ = &interface2;
+        std.debug.print("padded len = {}\n", .{padded_interface_len});
+        std.debug.print("interface2 len = {}\n", .{interface2.len});
+        std.debug.assert(padded_interface_len <= interface2.len);
+
+        const interface = msg[16..16+padded_interface_len];
+        std.debug.print("{s}\n", .{interface});
     }
 }
