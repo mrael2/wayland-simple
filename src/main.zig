@@ -165,6 +165,7 @@ const State = struct {
     sh_fd: c_int = undefined,
     shm_pool_size: u32 = undefined,
     wl_compositor: u32 = undefined,
+    wl_surface: u32 = undefined,
     wl_shm: u32 = undefined,
     xdg_wm_base: u32 = undefined,
 };
@@ -196,22 +197,37 @@ pub fn main() !void {
 
         state.shm_pool_data = shm_pool_data;
 
-        //while (true) {
-{
+        while (true) {
             var read_array: [4096]u8 = undefined;
             var read_buf: []u8 = &read_array;
             _ = &read_buf;
             const read_bytes = try std.posix.recv(fd, read_buf, 0);
+            if (read_bytes == -1) {
+                std.posix.exit(1);
+            }
+
             const buffer: []u8 = read_buf[0..read_bytes];
 
             std.debug.print("{}\n", .{read_bytes});
             //std.debug.print("{s}\n", .{read_buf});
             //std.debug.print("{s}\n", .{buffer});
 
-            current_id = current_id + 1;
+            while (read_bytes > 0) {
 
-            try waylandHandleMessage(allocator, fd, &state,
-                buffer, current_id);
+                current_id = current_id + 1;
+
+                try waylandHandleMessage(allocator, fd, &state,
+                    buffer, current_id);
+
+                const isBindPhaseComplete = state.wl_compositor != 0
+                    and state.wl_shm != 0
+                    and state.xdg_wm_base != 0
+                    and state.wl_surface != 0;
+                if (isBindPhaseComplete) {
+                    //std.debug.assert(state.state == STATE_NONE);
+                    std.debug.print("bind phase complete\n", .{});
+                }
+            }
         }
     }
 }
