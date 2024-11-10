@@ -156,7 +156,7 @@ fn mapMemory(sh_fd: c_int, size: usize) !PoolData {
 const color_channels = 4;
 
 const State = struct {
-    wayland_registry_id: u32 = undefined,
+    wl_registry: u32 = undefined,
     width: u32 = 117,
     height: u32 = 150,
     stride: u32 = undefined,
@@ -181,7 +181,7 @@ pub fn main() !void {
         state.stride = state.width * color_channels;
         state.shm_pool_size = state.height * state.stride; // single buffering
 	var current_id: u32 = 2;
-        state.wayland_registry_id = current_id;
+        state.wl_registry = current_id;
 
         const size = createRegistry(allocator, current_id, fd)
             catch unreachable;
@@ -231,7 +231,7 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
         native_endian);
     std.debug.assert(roundup4(announced_size) <= announced_size);
 
-    const is_registry_event = object_id == state.wayland_registry_id
+    const is_registry_event = object_id == state.wl_registry
         and opcode == 0;
 
     if (is_registry_event) {
@@ -256,7 +256,7 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
 
         state.wl_compositor = current_id;
         const registry = Registry {
-            .registry = state.wayland_registry_id,
+            .registry = state.wl_registry,
             .name = name,
             .interface = padded_interface_slice,
             .version = version,
