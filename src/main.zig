@@ -47,7 +47,6 @@ fn registryBindMessageHeader(registry: *const Registry) Header {
         + rounded
         + @sizeOf(@TypeOf(registry.version))
         + @sizeOf(@TypeOf(registry.current_id));
-    std.debug.print("{} {}\n", .{roundup4(size), size});
     std.debug.assert(roundup4(size) == size);
 
     const header = Header {
@@ -250,10 +249,7 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
         const padded_interface_len = roundup4(interface_len);
         const padded_interface_slice = msg[16..16+padded_interface_len];
         const index: usize = 16+padded_interface_len;
-        std.debug.print("index {} {}\n", .{index, @TypeOf(index)});
         const version_bytes = msg[index..index+4][0..4];
-        std.debug.print("version bytes {x}\n", .{version_bytes});
-        std.debug.print("vb type {}\n", .{@TypeOf(version_bytes)});
         const version = std.mem.readInt(u32, version_bytes, native_endian);
 
         const wl_compositor_interface = "wl_compositor";
