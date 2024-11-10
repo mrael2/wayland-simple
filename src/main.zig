@@ -34,6 +34,7 @@ const Registry = struct {
     registry: u32,
     name: u32,
     interface: []u8,
+    non_padded_interface: []u8,
     version: u32,
     current_id: u32,
 };
@@ -235,50 +236,53 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
         and opcode == 0;
 
     if (is_registry_event) {
-        const name_bytes = msg[8..12];
-        const name = std.mem.readInt(u32, name_bytes, native_endian);
-
-        const interface_len_bytes: *[4]u8 = msg[12..16];
-        const interface_len = std.mem.readInt(u32, interface_len_bytes,
-            native_endian);
-
-        const interface_slice1 = msg[16..16+interface_len];
-        std.debug.print("is1 type {}\n", .{@TypeOf(interface_slice1)});
-        const interfaceZ = @as([*:0]u8, msg[16..16+interface_len-1 :0]);
-        std.debug.print("{s}\n", .{interfaceZ});
-        const interface_slice = std.mem.span(interfaceZ);
-
-        const padded_interface_len = roundup4(interface_len);
-        const padded_interface_slice = msg[16..16+padded_interface_len];
-        const index: usize = 16+padded_interface_len;
-        const version_bytes = msg[index..index+4][0..4];
-        const version = std.mem.readInt(u32, version_bytes, native_endian);
-
+        const registry = registryInfo(msg, state, current_id);
         state.wl_compositor = current_id;
-        const registry = Registry {
-            .registry = state.wl_registry,
-            .name = name,
-            .interface = padded_interface_slice,
-            .version = version,
-            .current_id = current_id,
-        };
         try bindRegistry(allocator, &registry, fd);
         std.debug.print("after bind\n", .{});
 
         const wl_shm_interface = "wl_shm";
-        if (std.mem.eql(u8, wl_shm_interface, interface_slice)) {
+        if (std.mem.eql(u8, wl_shm_interface, registry.non_padded_interface)) {
             state.wl_shm = current_id;
         }
 
         const xdg_wm_base = "xdg_wm_base";
-        if (std.mem.eql(u8, xdg_wm_base, interface_slice)) {
+        if (std.mem.eql(u8, xdg_wm_base, registry.non_padded_interface)) {
             state.xdg_wm_base = current_id;
         }
 
         const wl_compositor_interface = "wl_compositor";
-        if (std.mem.eql(u8, wl_compositor_interface, interface_slice)) {
+        if (std.mem.eql(u8, wl_compositor_interface, registry.non_padded_interface)) {
             state.wl_compositor = current_id;
         }
         return;
     }
+}
+
+fn registryInfo(msg: []u8, state: *State, current_id: u32) Registry {
+    const name_bytes = msg[8..12];
+    const name = std.mem.readInt(u32, name_bytes, native_endian);
+
+    const interface_len_bytes: *[4]u8 = msg[12..16];
+    const interface_len = std.mem.readInt(u32, interface_len_bytes,
+        native_endian);
+
+    const interfaceZ = @as([*:0]u8, msg[16..16+interface_len-1 :0]);
+    const interface_slice = std.mem.span(interfaceZ);
+
+    const padded_interface_len = roundup4(interface_len);
+    const padded_interface_slice = msg[16..16+padded_interface_len];
+    const index: usize = 16+padded_interface_len;
+    const version_bytes = msg[index..index+4][0..4];
+    const version = std.mem.readInt(u32, version_bytes, native_endian);
+
+    const registry = Registry {
+        .registry = state.wl_registry,
+        .name = name,
+        .interface = padded_interface_slice,
+        .non_padded_interface = interface_slice,
+        .version = version,
+        .current_id = current_id,
+    };
+    return registry;
 }
