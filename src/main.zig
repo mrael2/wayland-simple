@@ -164,6 +164,8 @@ const State = struct {
     sh_fd: c_int = undefined,
     shm_pool_size: u32 = undefined,
     wl_compositor: u32 = undefined,
+    wl_shm: u32 = undefined,
+    xdg_wm_base: u32 = undefined,
 };
 
 pub fn main() !void {
@@ -252,18 +254,31 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
         const version_bytes = msg[index..index+4][0..4];
         const version = std.mem.readInt(u32, version_bytes, native_endian);
 
+        state.wl_compositor = current_id;
+        const registry = Registry {
+            .registry = state.wayland_registry_id,
+            .name = name,
+            .interface = padded_interface_slice,
+            .version = version,
+            .current_id = current_id,
+        };
+        try bindRegistry(allocator, &registry, fd);
+        std.debug.print("after bind\n", .{});
+
+        const wl_shm_interface = "wl_shm";
+        if (std.mem.eql(u8, wl_shm_interface, interface_slice)) {
+            state.wl_shm = current_id;
+        }
+
+        const xdg_wm_base = "xdg_wm_base";
+        if (std.mem.eql(u8, xdg_wm_base, interface_slice)) {
+            state.xdg_wm_base = current_id;
+        }
+
         const wl_compositor_interface = "wl_compositor";
         if (std.mem.eql(u8, wl_compositor_interface, interface_slice)) {
             state.wl_compositor = current_id;
-            const registry = Registry {
-                .registry = state.wayland_registry_id,
-                .name = name,
-                .interface = padded_interface_slice,
-                .version = version,
-                .current_id = current_id,
-            };
-            try bindRegistry(allocator, &registry, fd);
-            std.debug.print("after bind\n", .{});
         }
+        return;
     }
 }
