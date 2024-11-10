@@ -30,6 +30,76 @@ fn headerMemory(allocator: Allocator, header: *const Header) ![]u8 {
     return result;
 }
 
+const Registry = struct {
+    registry: u32,
+    name: u32,
+    interface: []u8,
+    version: u32,
+    current_id: u32,
+};
+
+fn registryBindMessageHeader(registry: *const Registry) Header {
+    const interface_len: u32 = @intCast(registry.interface.len);
+    const rounded: u16 = @intCast(roundup4(interface_len));
+    const size: u16 = wayland_header_size
+        + @sizeOf(@TypeOf(registry.name))
+        + @sizeOf(@TypeOf(interface_len))
+        + rounded
+        + @sizeOf(@TypeOf(registry.version))
+        + @sizeOf(@TypeOf(registry.current_id));
+    std.debug.print("{} {}\n", .{roundup4(size), size});
+    std.debug.assert(roundup4(size) == size);
+
+    const header = Header {
+        .object_id = registry.registry,
+        .opcode = 0, // registry bind opcode
+        .size = size,
+    };
+    return header;
+}
+
+fn registryBindMessage(allocator: Allocator, registry: *const Registry) ![]u8 {
+    const header = registryBindMessageHeader(registry);
+
+    const header_memory = try headerMemory(allocator, &header);
+    defer allocator.free(header_memory);
+
+    var name_bytes: [4]u8 = undefined;
+    var interface_len_bytes: [4]u8 = undefined;
+    var version_bytes: [4]u8 = undefined;
+    var current_id_bytes: [4]u8 = undefined;
+
+    const int_len: u32 = @intCast(registry.interface.len);
+    std.mem.writeInt(u32, &name_bytes, registry.name, native_endian);
+    std.mem.writeInt(u32, &interface_len_bytes, int_len,
+        native_endian);
+    std.mem.writeInt(u32, &version_bytes, registry.version, native_endian);
+    std.mem.writeInt(u32, &current_id_bytes, registry.current_id,
+        native_endian);
+
+    const items = [_][]u8{
+        header_memory,
+        &name_bytes,
+        &interface_len_bytes,
+        registry.interface,
+        &version_bytes,
+        &current_id_bytes,
+    };
+    const result = try std.mem.concat(allocator, u8, &items);
+    const len: u32 = @intCast(result.len);
+    std.debug.assert(len == roundup4(len));
+    return result;
+}
+
+fn bindRegistry(allocator: Allocator, registry: *const Registry,
+        fd: i32) !void {
+    const memory = try registryBindMessage(allocator, registry);
+    defer allocator.free(memory);
+
+    const send_size = try std.posix.send(fd, memory, std.os.linux.MSG.DONTWAIT);
+    _ = send_size;
+}
+
 fn registryMessage(allocator: Allocator, current_id: u32) ![]u8 {
     const size: u16 = wayland_header_size + @sizeOf(@TypeOf(current_id));
     std.debug.assert(roundup4(size) == size);
@@ -94,6 +164,7 @@ const State = struct {
     shm_pool_data: PoolData = undefined,
     sh_fd: c_int = undefined,
     shm_pool_size: u32 = undefined,
+    wl_compositor: u32 = undefined,
 };
 
 pub fn main() !void {
@@ -113,8 +184,6 @@ pub fn main() !void {
 
         const size = createRegistry(allocator, current_id, fd)
             catch unreachable;
-
-        current_id = current_id + 1;
 
         const sh_fd = try shmem.createSharedMemoryFile(allocator);
         state.sh_fd = sh_fd;
@@ -137,14 +206,18 @@ pub fn main() !void {
             //std.debug.print("{s}\n", .{read_buf});
             //std.debug.print("{s}\n", .{buffer});
 
-            waylandHandleMessage(sh_fd, &state, buffer);
+            current_id = current_id + 1;
+
+            try waylandHandleMessage(allocator, fd, &state,
+                buffer, current_id);
         }
     }
 }
 
-fn waylandHandleMessage(fd: c_int, state: *State, msg: []u8) void {
-    _ = fd;
+fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
+        msg: []u8, current_id: u32) !void {
     std.debug.assert(msg.len >= 8);
+    std.debug.print("msg len = {}\n", .{msg.len});
 
     const object_id_bytes = msg[0..4];
     const object_id: u32 = std.mem.readInt(u32, object_id_bytes, native_endian);
@@ -161,27 +234,40 @@ fn waylandHandleMessage(fd: c_int, state: *State, msg: []u8) void {
         and opcode == 0;
 
     if (is_registry_event) {
-        std.debug.print("got here\n", .{});
         const name_bytes = msg[8..12];
         const name = std.mem.readInt(u32, name_bytes, native_endian);
-        std.debug.print("name bytes = {x}\n", .{name_bytes});
-        std.debug.print("name = {x}\n", .{name});
 
-        const interface_len_bytes = msg[12..16];
+        const interface_len_bytes: *[4]u8 = msg[12..16];
         const interface_len = std.mem.readInt(u32, interface_len_bytes,
             native_endian);
-        std.debug.print("interface len bytes = {x}\n", .{interface_len_bytes});
-        std.debug.print("interface len = {x}\n", .{interface_len});
+
+        const interface_slice1 = msg[16..16+interface_len];
+        std.debug.print("is1 type {}\n", .{@TypeOf(interface_slice1)});
+        const interfaceZ = @as([*:0]u8, msg[16..16+interface_len-1 :0]);
+        std.debug.print("{s}\n", .{interfaceZ});
+        const interface_slice = std.mem.span(interfaceZ);
+
         const padded_interface_len = roundup4(interface_len);
+        const padded_interface_slice = msg[16..16+padded_interface_len];
+        const index: usize = 16+padded_interface_len;
+        std.debug.print("index {} {}\n", .{index, @TypeOf(index)});
+        const version_bytes = msg[index..index+4][0..4];
+        std.debug.print("version bytes {x}\n", .{version_bytes});
+        std.debug.print("vb type {}\n", .{@TypeOf(version_bytes)});
+        const version = std.mem.readInt(u32, version_bytes, native_endian);
 
-        const fixed_interface_size = 512;
-        var interface2: [fixed_interface_size]u8 = undefined;
-        _ = &interface2;
-        std.debug.print("padded len = {}\n", .{padded_interface_len});
-        std.debug.print("interface2 len = {}\n", .{interface2.len});
-        std.debug.assert(padded_interface_len <= interface2.len);
-
-        const interface = msg[16..16+padded_interface_len];
-        std.debug.print("{s}\n", .{interface});
+        const wl_compositor_interface = "wl_compositor";
+        if (std.mem.eql(u8, wl_compositor_interface, interface_slice)) {
+            state.wl_compositor = current_id;
+            const registry = Registry {
+                .registry = state.wayland_registry_id,
+                .name = name,
+                .interface = padded_interface_slice,
+                .version = version,
+                .current_id = current_id,
+            };
+            try bindRegistry(allocator, &registry, fd);
+            std.debug.print("after bind\n", .{});
+        }
     }
 }
