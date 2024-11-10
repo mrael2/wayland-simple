@@ -232,11 +232,18 @@ pub fn main() !void {
     }
 }
 
-fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
-        msg: []u8, current_id: u32) !void {
-    std.debug.assert(msg.len >= 8);
-    std.debug.print("msg len = {}\n", .{msg.len});
+const Event = enum {
+    registry,
+};
 
+const Message = struct {
+    object_id: u32,
+    opcode: u16,
+    announced_size: u16,
+    event: Event,
+};
+
+fn messageResponse(msg: []u8, state: *State) Message {
     const object_id_bytes = msg[0..4];
     const object_id: u32 = std.mem.readInt(u32, object_id_bytes, native_endian);
 
@@ -248,10 +255,34 @@ fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
         native_endian);
     std.debug.assert(roundup4(announced_size) <= announced_size);
 
+    const event = eventType(object_id, opcode, state);
+    const result = Message {
+        .object_id = object_id,
+        .opcode = opcode,
+        .announced_size = announced_size,
+        .event = event,
+    };
+    return result;
+}
+
+fn eventType(object_id: u32, opcode: u16, state: *State) Event {
     const is_registry_event = object_id == state.wl_registry
         and opcode == 0;
-
+    var result: Event = undefined;
     if (is_registry_event) {
+        result = Event.registry;
+    }
+    return result;
+}
+
+fn waylandHandleMessage(allocator: Allocator, fd: i32, state: *State,
+        msg: []u8, current_id: u32) !void {
+    std.debug.assert(msg.len >= 8);
+    std.debug.print("msg len = {}\n", .{msg.len});
+
+    const event = messageResponse(msg, state);
+
+    if (event.event == Event.registry) {
         const registry = registryInfo(msg, state, current_id);
         state.wl_compositor = current_id;
         try bindRegistry(allocator, &registry, fd);
