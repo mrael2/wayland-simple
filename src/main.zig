@@ -144,7 +144,7 @@ test "rounding2" {
     try std.testing.expect(roundup4(11) == 12);
 }
 
-const page_size = std.mem.page_size;
+const page_size = std.heap.page_size_min;
 const PoolData = []align(page_size)u8;
 
 fn mapMemory(sh_fd: c_int, size: usize) !PoolData {
